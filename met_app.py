@@ -1,42 +1,59 @@
-# 1. Map + city search
-st.header("1. Pick a place (search or click the map)")
+# Open API Service 1 - Explore Artworks with the MET Museum API
+# The museum keeps the data. Our app asks for it and displays it.
+
+import requests
+import streamlit as st
+
+SEARCH_URL = "https://collectionapi.metmuseum.org/public/collection/v1.1/search"
+OBJECT_URL = "https://collectionapi.metmuseum.org/public/collection/v1/objects"
+
+
+@st.cache_data(ttl=3600)  # remember answers for 1 hour
+def search_ids(query, limit):
+    """Step 1: search returns only a list of object IDs."""
+    resp = requests.get(
+        SEARCH_URL,
+        params={"q": query, "hasImages": "true", "limit": limit},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json().get("objectIDs") or []   # no results gives null, so use []
+
 
 @st.cache_data(ttl=3600)
-def search_city(name):
-    r = requests.get("https://geocoding-api.open-meteo.com/v1/search", params={
-        "name": name, "count": 5, "language": "en", "format": "json"}, timeout=10)
-    r.raise_for_status()
-    return r.json().get("results", [])
+def get_object(object_id):
+    """Step 2: ask for the details of one artwork."""
+    resp = requests.get(f"{OBJECT_URL}/{object_id}", timeout=10)
+    resp.raise_for_status()
+    return resp.json()
 
-if "pt" not in st.session_state:
-    st.session_state.pt = (33.303, 126.738)
-    st.session_state.last_click = None
-    st.session_state.last_search = None
 
-query = st.text_input("Search a city", placeholder="e.g. Busan, Tokyo, Paris")
-if query:
+st.set_page_config(page_title="Explore Artworks", layout="centered")
+st.title("Explore Artworks with the MET Museum API")
+st.caption("Arts and Advanced Big Data | Open API, Service 1")
+
+query = st.text_input("Search for Artworks", "flower")
+count = st.slider("How many artworks to show", 3, 12, 6)
+
+if query.strip():
     try:
-        results = search_city(query)
+        ids = search_ids(query.strip(), count)
+        if not ids:
+            st.info("No artworks found. Try another word, for example: cat, ocean, gold.")
+        cols = st.columns(3)
+        for i, object_id in enumerate(ids):
+            art = get_object(object_id)
+            image = art.get("primaryImageSmall")
+            if not image:
+                continue
+            with cols[i % 3]:
+                st.image(image, width="stretch")
+                st.markdown(f"**{art.get('title', 'Untitled')}**")
+                st.write(f"Artist: {art.get('artistDisplayName') or 'Unknown'}")
+                st.write(f"Year: {art.get('objectDate') or 'Unknown'}")
+                if art.get("objectURL"):
+                    st.markdown(f"[View at the Met]({art['objectURL']})")
     except requests.RequestException:
-        st.error("City search failed. Please try again.")
-        results = []
-    if results:
-        labels = [f"{r['name']}, {r.get('admin1', '')}, {r.get('country', '')}" for r in results]
-        choice = st.selectbox("Select a match", labels)
-        sel = results[labels.index(choice)]
-        new_pt = (sel["latitude"], sel["longitude"])
-        if st.session_state.last_search != new_pt:   # only apply when the choice changes
-            st.session_state.pt = new_pt
-            st.session_state.last_search = new_pt
-    else:
-        st.warning("No city found. Try a different spelling.")
+        st.error("Could not reach the museum's service right now. Please try again in a minute.")
 
-m = folium.Map(location=st.session_state.pt, zoom_start=8)
-folium.Marker(st.session_state.pt).add_to(m)
-out = st_folium(m, height=400, use_container_width=True)
-
-click = out.get("last_clicked") if out else None
-if click and click != st.session_state.last_click:   # only apply new clicks
-    st.session_state.last_click = click
-    st.session_state.pt = (click["lat"], click["lng"])
-    st.rerun()
+st.caption("Data: The Metropolitan Museum of Art Collection API (Open Access, CC0).")
